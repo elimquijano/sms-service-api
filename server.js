@@ -64,6 +64,27 @@ function processAndSendTask(task) {
   }
 }
 
+// --- Función para Parsear Números ---
+
+function parseNumbers(input) {
+  // Verificamos si la entrada es una cadena vacía
+  if (!input) {
+    return [];
+  }
+
+  // Dividimos la cadena por comas y filtramos los elementos que son números de 9 caracteres
+  const numbers = input
+    .split(",")
+    .map((num) => num.trim())
+    .filter((num) => /^\d{9}$/.test(num)); // Verificamos que tenga exactamente 9 dígitos
+
+  // Añadimos el prefijo "+51" a cada número válido
+  const formattedNumbers = numbers.map((num) => `+51${num}`);
+
+  // Retornamos el array de números formateados solo si hay números válidos
+  return formattedNumbers.length > 0 ? formattedNumbers : [];
+}
+
 // --- Middleware de Autenticación Básica para la API ---
 const basicAuthMiddleware = (req, res, next) => {
   // ... (el código del middleware es el mismo que en la versión anterior)
@@ -97,27 +118,39 @@ const app = express();
 app.use(express.json());
 
 app.post("/send-sms", basicAuthMiddleware, (req, res) => {
-  const { numero, mensaje } = req.body;
+  const { numeros, mensaje } = req.body;
   logger.info("Recibida solicitud /send-sms");
 
-  if (!numero || !mensaje) {
+  if (!numeros || !mensaje) {
     logger.warn("Solicitud /send-sms con campos faltantes.", {
       body: req.body,
     });
     return res
       .status(400)
-      .json({ error: 'Los campos "numero" y "mensaje" son obligatorios.' });
+      .json({ error: 'Los campos "numeros" y "mensaje" son obligatorios.' });
   }
 
-  const task = {
-    taskId: `sms_${Date.now()}`,
-    numero,
-    mensaje,
-    attempts: 1, // Contador de intentos
-  };
+  const arrayNumeros = parseNumbers(numeros);
+  if (arrayNumeros.length === 0) {
+    logger.warn("Solicitud /send-sms con formato de números inválido.");
+    return res.status(400).json({
+      error:
+        'El campo "numeros" debe ser un string con números separados por comas.',
+    });
+  }
 
-  // Procesar la tarea de forma asíncrona
-  processAndSendTask(task);
+  // Crear una tarea para cada número
+  arrayNumeros.forEach((numero) => {
+    const task = {
+      taskId: `sms_${Date.now()}`,
+      numero,
+      mensaje,
+      attempts: 1, // Contador de intentos
+    };
+
+    // Procesar la tarea de forma asíncrona
+    processAndSendTask(task);
+  });
 
   // Responder inmediatamente
   res.status(202).json({
