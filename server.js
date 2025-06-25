@@ -139,6 +139,9 @@ app.post("/send-sms", basicAuthMiddleware, (req, res) => {
     });
   }
 
+  // Crear un arreglo para almacenar los taskIds
+  const taskIds = [];
+
   // Crear una tarea para cada número
   arrayNumeros.forEach((numero) => {
     const task = {
@@ -150,12 +153,15 @@ app.post("/send-sms", basicAuthMiddleware, (req, res) => {
 
     // Procesar la tarea de forma asíncrona
     processAndSendTask(task);
+
+    // Almacenar el taskId
+    taskIds.push(task.taskId);
   });
 
-  // Responder inmediatamente
+  // Responder inmediatamente con todos los taskIds
   res.status(202).json({
     message: "Solicitud de SMS aceptada y en proceso.",
-    taskId: task.taskId,
+    taskIds: taskIds, // Enviar todos los taskIds
   });
 });
 

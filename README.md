@@ -68,7 +68,7 @@ El servidor escuchará en el puerto definido en la variable de entorno PORT.
 
 ## API
 
-# Enviar SMS
+### Enviar SMS
 - Endpoint: POST /send-sms
 
 - Autenticación: Básica
@@ -87,7 +87,7 @@ El servidor escuchará en el puerto definido en la variable de entorno PORT.
 **202 Accepted:** La solicitud ha sido aceptada y está en proceso.
 **400 Bad Request:** Si faltan campos o el formato de números es inválido.
 
-# Estado
+### Estado
 
 - Endpoint: GET /status
 
