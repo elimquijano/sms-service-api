@@ -13,12 +13,15 @@ const BASIC_AUTH_USER = process.env.BASIC_AUTH_USER;
 const BASIC_AUTH_PASS = process.env.BASIC_AUTH_PASS;
 const WEBSOCKET_TOKEN = process.env.WEBSOCKET_TOKEN;
 const QUEUE_FILE_PATH = "./queue.json";
+const SEND_INTERVAL_MS = 5000;
+
+// NUEVO: Límite de caracteres para un solo mensaje.
+const MAX_MESSAGE_LENGTH = 250;
 
 // --- Estado en Memoria y Persistencia ---
-let phoneSocket = null; // Almacenará el socket del único teléfono conectado
-let pendingTasks = []; // La cola de tareas ahora es un simple array
+let phoneSocket = null;
+let pendingTasks = [];
 
-// Carga las tareas pendientes de un archivo al iniciar
 function loadPendingTasks() {
   try {
     if (fs.existsSync(QUEUE_FILE_PATH)) {
@@ -38,7 +41,6 @@ function loadPendingTasks() {
   }
 }
 
-// Guarda las tareas pendientes en un archivo
 function savePendingTasks() {
   try {
     fs.writeFileSync(QUEUE_FILE_PATH, JSON.stringify(pendingTasks, null, 2));
@@ -50,44 +52,17 @@ function savePendingTasks() {
   }
 }
 
-// --- Lógica de Procesamiento de Tareas ---
-function processAndSendTask(task) {
-  if (phoneSocket && phoneSocket.readyState === WebSocket.OPEN) {
-    phoneSocket.send(JSON.stringify({ type: "NEW_TASK", payload: task }));
-    logger.info(`Tarea ${task.taskId} enviada en tiempo real al teléfono.`);
-  } else {
-    pendingTasks.push(task);
-    savePendingTasks();
-    logger.warn(
-      `Teléfono no conectado. Tarea ${task.taskId} encolada. Tareas pendientes: ${pendingTasks.length}`
-    );
-  }
-}
-
-// --- Función para Parsear Números ---
-
 function parseNumbers(input) {
-  // Verificamos si la entrada es una cadena vacía
-  if (!input) {
-    return [];
-  }
-
-  // Dividimos la cadena por comas y filtramos los elementos que son números de 9 caracteres
+  if (!input) return [];
   const numbers = input
     .split(",")
     .map((num) => num.trim())
-    .filter((num) => /^\d{9}$/.test(num)); // Verificamos que tenga exactamente 9 dígitos
-
-  // Añadimos el prefijo "+51" a cada número válido
+    .filter((num) => /^\d{9}$/.test(num));
   const formattedNumbers = numbers.map((num) => `+51${num}`);
-
-  // Retornamos el array de números formateados solo si hay números válidos
   return formattedNumbers.length > 0 ? formattedNumbers : [];
 }
 
-// --- Middleware de Autenticación Básica para la API ---
 const basicAuthMiddleware = (req, res, next) => {
-  // ... (el código del middleware es el mismo que en la versión anterior)
   const authHeader = req.headers.authorization;
   if (!authHeader) {
     res.setHeader("WWW-Authenticate", 'Basic realm="Acceso restringido"');
@@ -113,10 +88,10 @@ const basicAuthMiddleware = (req, res, next) => {
   res.status(401).send("Credenciales inválidas.");
 };
 
-// --- Servidor Express (API HTTP) ---
 const app = express();
 app.use(express.json());
 
+// MODIFICADO: Se añade la validación de longitud del mensaje.
 app.post("/send-sms", basicAuthMiddleware, (req, res) => {
   const { numeros, mensaje } = req.body;
   logger.info("Recibida solicitud /send-sms");
@@ -130,6 +105,19 @@ app.post("/send-sms", basicAuthMiddleware, (req, res) => {
       .json({ error: 'Los campos "numeros" y "mensaje" son obligatorios.' });
   }
 
+  // NUEVO: Validar la longitud del mensaje.
+  if (mensaje.length > MAX_MESSAGE_LENGTH) {
+    logger.warn(
+      `Solicitud /send-sms rechazada por exceder el límite de caracteres. Longitud: ${mensaje.length}`
+    );
+    // 413 Payload Too Large es el código de estado semánticamente correcto.
+    return res.status(413).json({
+      error: `El mensaje excede el límite de ${MAX_MESSAGE_LENGTH} caracteres.`,
+      longitud_enviada: mensaje.length,
+      limite_permitido: MAX_MESSAGE_LENGTH,
+    });
+  }
+
   const arrayNumeros = parseNumbers(numeros);
   if (arrayNumeros.length === 0) {
     logger.warn("Solicitud /send-sms con formato de números inválido.");
@@ -139,29 +127,29 @@ app.post("/send-sms", basicAuthMiddleware, (req, res) => {
     });
   }
 
-  // Crear un arreglo para almacenar los taskIds
   const taskIds = [];
 
-  // Crear una tarea para cada número
-  arrayNumeros.forEach((numero) => {
+  arrayNumeros.forEach((numero, index) => {
     const task = {
-      taskId: `sms_${Date.now()}`,
+      taskId: `sms_${Date.now()}_${index}`,
       numero,
       mensaje,
-      attempts: 1, // Contador de intentos
+      attempts: 1,
     };
-
-    // Procesar la tarea de forma asíncrona
-    processAndSendTask(task);
-
-    // Almacenar el taskId
+    pendingTasks.push(task);
     taskIds.push(task.taskId);
   });
 
-  // Responder inmediatamente con todos los taskIds
+  savePendingTasks();
+  logger.info(
+    `${arrayNumeros.length} tareas nuevas añadidas a la cola. Total pendiente: ${pendingTasks.length}`
+  );
+
   res.status(202).json({
-    message: "Solicitud de SMS aceptada y en proceso.",
-    taskIds: taskIds, // Enviar todos los taskIds
+    message: `Enviando ${arrayNumeros.length} solicitud${
+      arrayNumeros.length == 1 ? "" : "es"
+    } de SMS.`,
+    taskIds: taskIds,
   });
 });
 
@@ -173,16 +161,12 @@ app.get("/status", basicAuthMiddleware, (req, res) => {
   });
 });
 
-// --- Servidor WebSocket ---
 const server = http.createServer(app);
-const wss = new WebSocket.Server({
-  noServer: true, // Usaremos el hook 'upgrade' para la autenticación
-});
+const wss = new WebSocket.Server({ noServer: true });
 
 server.on("upgrade", (request, socket, head) => {
   const parsedUrl = url.parse(request.url, true);
   const token = parsedUrl.query.token;
-
   if (token === WEBSOCKET_TOKEN) {
     wss.handleUpgrade(request, socket, head, (ws) => {
       wss.emit("connection", ws, request);
@@ -201,23 +185,6 @@ wss.on("connection", (ws, req) => {
   );
   phoneSocket = ws;
 
-  // Al conectar, enviar todas las tareas pendientes
-  if (pendingTasks.length > 0) {
-    logger.info(
-      `Enviando ${pendingTasks.length} tareas pendientes al teléfono.`
-    );
-    // Enviamos una copia y vaciamos la cola original
-    const tasksToSend = [...pendingTasks];
-    pendingTasks = [];
-    savePendingTasks();
-
-    tasksToSend.forEach((task) => {
-      // Incrementamos el contador de intentos al reenviar
-      task.attempts = (task.attempts || 1) + 1;
-      ws.send(JSON.stringify({ type: "NEW_TASK", payload: task }));
-    });
-  }
-
   ws.on("message", (message) => {
     try {
       const data = JSON.parse(message);
@@ -230,13 +197,12 @@ wss.on("connection", (ws, req) => {
           logger.error(
             `Fallo reportado para la tarea ${data.taskId}. Detalles: ${data.details}. Re-encolando.`
           );
-          // El teléfono debe devolver el objeto de la tarea para poder re-encolarlo
           if (data.task) {
             pendingTasks.push(data.task);
             savePendingTasks();
           } else {
             logger.error(
-              `No se pudo re-encolar la tarea ${data.taskId} porque no se incluyó el objeto de la tarea en el reporte de fallo.`
+              `No se pudo re-encolar la tarea ${data.taskId} porque no se incluyó el objeto de la tarea.`
             );
           }
         }
@@ -261,9 +227,37 @@ wss.on("connection", (ws, req) => {
   });
 });
 
-// --- Iniciar Servidor ---
+async function startSenderLoop() {
+  logger.info(
+    `Bucle de envío iniciado. Verificando tareas cada segundo. Intervalo de envío: ${
+      SEND_INTERVAL_MS / 1000
+    }s.`
+  );
+
+  while (true) {
+    if (
+      phoneSocket &&
+      phoneSocket.readyState === WebSocket.OPEN &&
+      pendingTasks.length > 0
+    ) {
+      const task = pendingTasks.shift();
+      savePendingTasks();
+
+      logger.info(
+        `Despachando tarea ${task.taskId} desde la cola. Tareas restantes: ${pendingTasks.length}`
+      );
+      phoneSocket.send(JSON.stringify({ type: "NEW_TASK", payload: task }));
+
+      await new Promise((resolve) => setTimeout(resolve, SEND_INTERVAL_MS));
+    } else {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+  }
+}
+
 server.listen(PORT, "0.0.0.0", () => {
   loadPendingTasks();
   logger.info(`Servidor HTTP y WebSocket iniciado en puerto ${PORT}`);
   logger.info(`Token de WebSocket configurado.`);
+  startSenderLoop();
 });
