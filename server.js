@@ -87,7 +87,7 @@ function createSmsService(config, logger = createLogger(config.logLevel)) {
 
   function enqueue(req, res, next) {
     try {
-      const { recipients, message } = validateMessageBody(req.body, config);
+      const { recipients, message, sms } = validateMessageBody(req.body, config);
       const idempotencyKey = validateIdempotencyKey(req.headers["idempotency-key"]);
       const payloadHash = crypto
         .createHash("sha256")
@@ -109,6 +109,7 @@ function createSmsService(config, logger = createLogger(config.logLevel)) {
           payloadHash,
           recipients,
           message,
+          sms,
           maxQueueSize: config.maxQueueSize,
           maxQueuedBytes: config.maxQueuedBytes,
         });
@@ -121,6 +122,7 @@ function createSmsService(config, logger = createLogger(config.logLevel)) {
         accepted: result.total,
         duplicate: result.duplicate,
         taskIds: result.taskIds,
+        sms: { encoding: sms.encoding, units: sms.units, parts: sms.parts },
         statusUrl: location,
       });
     } catch (error) {
@@ -166,6 +168,13 @@ function createSmsService(config, logger = createLogger(config.logLevel)) {
       queue_capacity: config.maxQueueSize,
       queued_message_bytes: store.getActiveBytes(),
       queued_message_bytes_capacity: config.maxQueuedBytes,
+      dispatch_policy: {
+        android_sms_rpm: config.androidSmsRpm,
+        minimum_interval_ms: config.sendIntervalMs,
+        single_part_only: true,
+        max_message_characters: config.maxMessageLength,
+        max_retries: config.maxRetries,
+      },
       counts,
     });
   });
@@ -306,6 +315,13 @@ function main() {
   service.dispatcher.start();
   service.server.listen(config.port, config.host, () => {
     logger.info("Servidor SMS iniciado", { host: config.host, port: config.port, env: config.env });
+    logger.info("Política de despacho activa", {
+      androidSmsRpm: config.androidSmsRpm,
+      minimumIntervalMs: config.sendIntervalMs,
+      singlePartOnly: true,
+      maxMessageCharacters: config.maxMessageLength,
+      maxRetries: config.maxRetries,
+    });
   });
 
   const shutdown = (signal) => {

@@ -33,6 +33,8 @@ class JsonStore {
     this.filename = filename;
     this.backupFilename = `${filename}.bak`;
     this.logger = logger;
+    this.lastBackupAt = 0;
+    this.backupIntervalMs = 5000;
     fs.mkdirSync(path.dirname(filename), { recursive: true });
     this.state = this.load();
   }
@@ -134,7 +136,7 @@ class JsonStore {
     });
   }
 
-  persist(nextState, makeBackup = true) {
+  persist(nextState, makeBackup = true, forceBackup = false) {
     const temporary = `${this.filename}.${process.pid}.${crypto.randomUUID()}.tmp`;
     try {
       fs.writeFileSync(temporary, `${JSON.stringify(nextState)}\n`, {
@@ -142,8 +144,10 @@ class JsonStore {
         flag: "wx",
         flush: true,
       });
-      if (makeBackup && fs.existsSync(this.filename)) {
+      const backupDue = forceBackup || Date.now() - this.lastBackupAt >= this.backupIntervalMs;
+      if (makeBackup && backupDue && fs.existsSync(this.filename)) {
         fs.copyFileSync(this.filename, this.backupFilename);
+        this.lastBackupAt = Date.now();
       }
       fs.renameSync(temporary, this.filename);
     } finally {
@@ -179,6 +183,7 @@ class JsonStore {
     payloadHash,
     recipients,
     message,
+    sms,
     maxQueueSize,
     maxQueuedBytes = Number.MAX_SAFE_INTEGER,
     now = Date.now(),
@@ -220,6 +225,8 @@ class JsonStore {
           clientId,
           numero: phone,
           mensaje: message,
+          smsEncoding: sms?.encoding || "UNKNOWN",
+          smsParts: sms?.parts || 1,
           status: "QUEUED",
           attempts: 0,
           availableAt: now,
@@ -454,7 +461,7 @@ class JsonStore {
   }
 
   close() {
-    this.persist(this.state);
+    this.persist(this.state, true, true);
   }
 }
 
@@ -469,6 +476,8 @@ function publicTask(task) {
     lastError: task.lastError,
     lastEventId: task.lastEventId,
     providerTimestamp: task.providerTimestamp,
+    smsEncoding: task.smsEncoding || "UNKNOWN",
+    smsParts: task.smsParts || 1,
     createdAt: task.createdAt,
     updatedAt: task.updatedAt,
   };

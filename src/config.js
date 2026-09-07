@@ -28,6 +28,8 @@ function csv(name) {
 function loadConfig() {
   const root = path.resolve(__dirname, "..");
   const production = process.env.NODE_ENV === "production";
+  const androidSmsRpm = integer("ANDROID_SMS_RPM", 20, { min: 1, max: 30 });
+  const requestedSendInterval = integer("SEND_INTERVAL_MS", 1500, { min: 250 });
   const config = {
     env: process.env.NODE_ENV || "development",
     port: integer("PORT", 3000, { min: 1, max: 65535 }),
@@ -42,21 +44,22 @@ function loadConfig() {
     stateFile: path.resolve(root, process.env.SMS_STATE_FILE || "data/sms-state.json"),
     defaultCountryCode: process.env.DEFAULT_COUNTRY_CODE || "+51",
     maxBodyBytes: integer("MAX_BODY_BYTES", 262_144, { min: 1024, max: 10_485_760 }),
-    maxMessageLength: integer("MAX_MESSAGE_LENGTH", 4000, { min: 1, max: 4000 }),
-    maxRecipientsPerRequest: integer("MAX_RECIPIENTS_PER_REQUEST", 1000, { min: 1, max: 10_000 }),
-    maxQueueSize: integer("MAX_QUEUE_SIZE", 50_000, { min: 1 }),
-    maxQueuedBytes: integer("MAX_QUEUED_MESSAGE_BYTES", 50_000_000, { min: 1024 }),
+    maxMessageLength: integer("MAX_MESSAGE_LENGTH", 300, { min: 1, max: 300 }),
+    maxRecipientsPerRequest: integer("MAX_RECIPIENTS_PER_REQUEST", 500, { min: 1, max: 5000 }),
+    maxQueueSize: integer("MAX_QUEUE_SIZE", 5000, { min: 1 }),
+    maxQueuedBytes: integer("MAX_QUEUED_MESSAGE_BYTES", 5_000_000, { min: 1024 }),
     ipRatePerMinute: integer("IP_RATE_PER_MINUTE", 300, { min: 10 }),
     requestRatePerMinute: integer("REQUEST_RATE_PER_MINUTE", 60, { min: 1 }),
     recipientRatePerMinute: integer("RECIPIENT_RATE_PER_MINUTE", 1000, { min: 1 }),
-    sendIntervalMs: integer("SEND_INTERVAL_MS", 5000, { min: 100 }),
-    burstSize: integer("BURST_SIZE", 20, { min: 1 }),
-    burstPauseMs: integer("BURST_PAUSE_MS", 60_000, { min: 0 }),
-    ackTimeoutMs: integer("ACK_TIMEOUT_MS", 120_000, { min: 10_000 }),
-    reconnectRetryMs: integer("RECONNECT_RETRY_MS", 15_000, { min: 1000 }),
-    maxAttempts: integer("MAX_ATTEMPTS", 5, { min: 1, max: 100 }),
-    retryBaseMs: integer("RETRY_BASE_MS", 30_000, { min: 1000 }),
-    retryMaxMs: integer("RETRY_MAX_MS", 900_000, { min: 1000 }),
+    androidSmsRpm,
+    sendIntervalMs: Math.max(requestedSendInterval, Math.ceil(60_000 / androidSmsRpm)),
+    burstSize: integer("BURST_SIZE", 10, { min: 1 }),
+    burstPauseMs: integer("BURST_PAUSE_MS", 10_000, { min: 0 }),
+    ackTimeoutMs: integer("ACK_TIMEOUT_MS", 30_000, { min: 5000 }),
+    reconnectRetryMs: integer("RECONNECT_RETRY_MS", 3000, { min: 500 }),
+    maxRetries: integer("MAX_RETRIES", 2, { min: 0, max: 2 }),
+    retryBaseMs: integer("RETRY_BASE_MS", 5000, { min: 500 }),
+    retryMaxMs: integer("RETRY_MAX_MS", 30_000, { min: 500 }),
     retryFailedTasks: boolean("RETRY_FAILED_TASKS", true),
     heartbeatMs: integer("HEARTBEAT_MS", 30_000, { min: 5000 }),
     wsMessagesPerMinute: integer("WS_MESSAGES_PER_MINUTE", 240, { min: 10 }),
@@ -65,6 +68,8 @@ function loadConfig() {
     retentionDays: integer("RETENTION_DAYS", 365, { min: 1, max: 3650 }),
     logLevel: process.env.LOG_LEVEL || "info",
   };
+  // Dos reintentos significan un máximo total de tres intentos.
+  config.maxAttempts = config.maxRetries + 1;
 
   if (!/^\+\d{1,4}$/.test(config.defaultCountryCode)) {
     throw new Error("DEFAULT_COUNTRY_CODE debe tener formato +<código>");

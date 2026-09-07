@@ -71,6 +71,8 @@ Repetir exactamente la solicitud con la misma clave devuelve `200` y `duplicate:
 
 Los números pueden ser un arreglo o un string separado por comas. Un número local de nueve dígitos recibe `DEFAULT_COUNTRY_CODE`; los demás deben contener entre 6 y 20 dígitos y pueden iniciar con `+`.
 
+El mensaje tiene un límite HTTP absoluto de 300 caracteres, pero además debe caber en **una sola parte SMS**. El servidor calcula la codificación antes de encolar: hasta 160 unidades GSM-7 o 70 unidades Unicode. Caracteres de la extensión GSM como `^`, `{`, `}` y `€` consumen dos unidades; los emojis normalmente consumen dos unidades Unicode. Si Android tendría que dividir el texto, la API responde `400` y no crea tareas.
+
 ## Consulta y operación
 
 - `GET /v1/requests/:requestId`: resumen y tareas de una solicitud del cliente autenticado.
@@ -87,9 +89,11 @@ Estados internos: `QUEUED`, `DISPATCHED`, `PROCESSING`, `RETRY_WAIT`, `SENT`, `F
 Los controles se definen en `.env`:
 
 - `SEND_INTERVAL_MS`: pausa mínima entre órdenes.
+- `ANDROID_SMS_RPM`: presupuesto máximo de intentos por minuto; admite hasta 30 y por defecto usa 20. El servidor eleva automáticamente la pausa mínima a `60000 / RPM` aunque `SEND_INTERVAL_MS` sea menor.
 - `BURST_SIZE` y `BURST_PAUSE_MS`: cantidad por ráfaga y pausa posterior.
 - `ACK_TIMEOUT_MS`: tiempo máximo de una tarea en vuelo.
-- `MAX_ATTEMPTS`, `RETRY_BASE_MS` y `RETRY_MAX_MS`: política de reintento exponencial.
+- `MAX_RETRIES` admite como máximo `2`; son dos reintentos después del envío inicial.
+- `RETRY_BASE_MS` y `RETRY_MAX_MS`: espera exponencial entre reintentos.
 - `MAX_QUEUE_SIZE` y `MAX_QUEUED_MESSAGE_BYTES`: rechazan con `503` antes de sobrecargar memoria o disco.
 - `IP_RATE_PER_MINUTE`, `REQUEST_RATE_PER_MINUTE` y `RECIPIENT_RATE_PER_MINUTE`: límites por IP, cliente y destinatarios; responde `429` con `Retry-After`.
 

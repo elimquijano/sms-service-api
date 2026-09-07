@@ -32,12 +32,14 @@ function config(stateFile) {
     ipRatePerMinute: 1000,
     requestRatePerMinute: 100,
     recipientRatePerMinute: 100,
+    androidSmsRpm: 30,
     sendIntervalMs: 100,
     burstSize: 10,
     burstPauseMs: 100,
     ackTimeoutMs: 10_000,
     reconnectRetryMs: 1000,
     maxAttempts: 3,
+    maxRetries: 2,
     retryBaseMs: 1000,
     retryMaxMs: 5000,
     retryFailedTasks: true,
@@ -79,7 +81,7 @@ test("flujo HTTP -> Android -> ACK -> consulta final", { timeout: 10_000 }, asyn
   ws.send(JSON.stringify({ type: "CLIENT_READY", protocolVersion: 1, pendingStatuses: 0 }));
 
   const newTaskPromise = nextJson(ws, "NEW_TASK");
-  const body = { numeros: ["987654321"], mensaje: "prueba integral" };
+  const body = { numeros: ["987654321", "987654322"], mensaje: "prueba integral" };
   const accepted = await fetch(`http://127.0.0.1:${port}/v1/messages`, {
     method: "POST",
     headers: {
@@ -91,6 +93,7 @@ test("flujo HTTP -> Android -> ACK -> consulta final", { timeout: 10_000 }, asyn
   });
   assert.equal(accepted.status, 202);
   const acceptedBody = await accepted.json();
+  assert.deepEqual(acceptedBody.sms, { encoding: "GSM-7", units: 15, parts: 1 });
 
   const task = await newTaskPromise;
   assert.equal(task.payload.taskId, acceptedBody.taskIds[0]);
@@ -98,6 +101,7 @@ test("flujo HTTP -> Android -> ACK -> consulta final", { timeout: 10_000 }, asyn
   assert.equal(task.payload.attempts, 0);
 
   const ackPromise = nextJson(ws, "STATUS_ACK");
+  const secondTaskPromise = nextJson(ws, "NEW_TASK");
   ws.send(JSON.stringify({
     type: "STATUS_UPDATE",
     eventId: "integration-event-1",
@@ -109,12 +113,25 @@ test("flujo HTTP -> Android -> ACK -> consulta final", { timeout: 10_000 }, asyn
   const ack = await ackPromise;
   assert.equal(ack.payload.eventId, "integration-event-1");
 
+  const secondTask = await secondTaskPromise;
+  assert.equal(secondTask.payload.taskId, acceptedBody.taskIds[1]);
+  assert.equal(secondTask.payload.numero, "+51987654322");
+  const secondAckPromise = nextJson(ws, "STATUS_ACK");
+  ws.send(JSON.stringify({
+    type: "STATUS_UPDATE",
+    eventId: "integration-event-2",
+    taskId: secondTask.payload.taskId,
+    status: "SENT",
+    timestamp: Date.now(),
+  }));
+  assert.equal((await secondAckPromise).payload.eventId, "integration-event-2");
+
   const statusResponse = await fetch(`http://127.0.0.1:${port}${acceptedBody.statusUrl}`, {
     headers: { Authorization: "Bearer integration-secret-123456789" },
   });
   const status = await statusResponse.json();
   assert.equal(status.status, "COMPLETED");
-  assert.equal(status.tasks[0].status, "SENT");
+  assert.deepEqual(status.tasks.map((item) => item.status), ["SENT", "SENT"]);
 
   const duplicate = await fetch(`http://127.0.0.1:${port}/v1/messages`, {
     method: "POST",

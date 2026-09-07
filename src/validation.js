@@ -1,3 +1,5 @@
+const { analyzeSms } = require("./sms");
+
 class ValidationError extends Error {
   constructor(message, field) {
     super(message);
@@ -40,7 +42,15 @@ function validateMessageBody(body, config) {
   if (message.length > config.maxMessageLength) {
     throw new ValidationError(`El mensaje excede ${config.maxMessageLength} caracteres`, "mensaje");
   }
-  return { recipients: parseRecipients(body.numeros, config), message };
+  const sms = analyzeSms(message);
+  if (sms.parts > 1) {
+    throw new ValidationError(
+      `El mensaje requiere ${sms.parts} partes ${sms.encoding}. ` +
+      `Para evitar que Android lo divida debe ocupar como máximo ${sms.singlePartLimit} unidades ${sms.encoding}; ocupa ${sms.units}.`,
+      "mensaje"
+    );
+  }
+  return { recipients: parseRecipients(body.numeros, config), message, sms };
 }
 
 function validateIdempotencyKey(value) {

@@ -127,9 +127,22 @@ test("recupera el respaldo si el JSON principal está dañado", (t) => {
   const { filename, store } = fixture(t);
   enqueue(store, { idempotencyKey: "first" });
   enqueue(store, { idempotencyKey: "second", payloadHash: "hash-b" });
+  store.close();
   fs.writeFileSync(filename, "{archivo truncado", "utf8");
   const recovered = new JsonStore(filename, logger);
-  assert.equal(Object.keys(recovered.state.requests).length, 1);
+  assert.equal(Object.keys(recovered.state.requests).length, 2);
+});
+
+test("un timeout libera la cola y permite despachar la siguiente tarea", (t) => {
+  const { store } = fixture(t);
+  const created = enqueue(store, {
+    recipients: ["+51911111111", "+51922222222"],
+    idempotencyKey: "timeout-batch",
+  });
+  assert.equal(store.claimNext(1000, 5000).taskId, created.taskIds[0]);
+  const expired = store.requeueExpired(retryConfig, 6001);
+  assert.deepEqual(expired, [created.taskIds[0]]);
+  assert.equal(store.claimNext(6001, 5000).taskId, created.taskIds[1]);
 });
 
 test("importa queue.json legado una sola vez conservando taskId", (t) => {

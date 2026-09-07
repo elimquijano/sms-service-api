@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "test": "node --test --test-concurrency=1",
-    "check": "node --check server.js && node --check src/store.js && node --check src/dispatcher.js"
+    "check": "node --check server.js && node --check src/store.js && node --check src/dispatcher.js && node --check src/sms.js"
   },
   "keywords": [],
   "author": "",
