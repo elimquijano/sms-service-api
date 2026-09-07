@@ -1,39 +1,41 @@
+const fs = require("node:fs");
+const path = require("node:path");
 const winston = require("winston");
-const path = require("path");
 require("winston-daily-rotate-file");
 
-const logDir = path.join(__dirname, "logs");
+function createLogger(level = "info") {
+  const logDir = path.join(__dirname, "logs");
+  fs.mkdirSync(logDir, { recursive: true });
 
-// Define el formato del log
-const logFormat = winston.format.combine(
-  winston.format.timestamp({ format: "YYYY-MM-DD HH:mm:ss" }),
-  winston.format.printf(
-    (info) => `${info.timestamp} ${info.level}: ${info.message}`
-  )
-);
+  return winston.createLogger({
+    level,
+    defaultMeta: { service: "sms-service-api" },
+    format: winston.format.combine(
+      winston.format.timestamp(),
+      winston.format.errors({ stack: false }),
+      winston.format.json()
+    ),
+    transports: [
+      new winston.transports.Console({
+        format: winston.format.combine(
+          winston.format.colorize(),
+          winston.format.timestamp({ format: "YYYY-MM-DD HH:mm:ss" }),
+          winston.format.printf(({ timestamp, level: logLevel, message, ...meta }) => {
+            const details = Object.keys(meta).length ? ` ${JSON.stringify(meta)}` : "";
+            return `${timestamp} ${logLevel}: ${message}${details}`;
+          })
+        ),
+      }),
+      new winston.transports.DailyRotateFile({
+        filename: path.join(logDir, "sms-%DATE%.json.log"),
+        datePattern: "YYYY-MM-DD",
+        zippedArchive: true,
+        maxSize: "20m",
+        maxFiles: "14d",
+      }),
+    ],
+    exitOnError: false,
+  });
+}
 
-// Transport para rotación diaria de archivos
-const dailyRotateFileTransport = new winston.transports.DailyRotateFile({
-  filename: path.join(logDir, "log-%DATE%.log"),
-  datePattern: "YYYY-MM-DD",
-  zippedArchive: true, // Comprime los logs antiguos
-  maxSize: "20m", // Rota el archivo si alcanza 20MB
-  maxFiles: "14d", // Conserva los logs de los últimos 14 días
-});
-
-const logger = winston.createLogger({
-  level: "info", // Nivel mínimo de log a registrar
-  format: logFormat,
-  transports: [
-    new winston.transports.Console({
-      format: winston.format.combine(
-        winston.format.colorize(), // Añade colores a la consola
-        logFormat
-      ),
-    }),
-    dailyRotateFileTransport,
-  ],
-  exitOnError: false,
-});
-
-module.exports = logger;
+module.exports = { createLogger };

@@ -1,112 +1,105 @@
 # SMS Service API
 
-Este proyecto es una API para el envío de SMS utilizando WebSocket y Express. Permite enviar mensajes a números de teléfono y gestionar tareas pendientes.
+Servicio HTTP durable que recibe solicitudes individuales o masivas, las guarda en JSON y entrega una orden a la vez al gateway Android definido en [`api.md`](api.md). Una tarea solo sale de la cola activa después de que su estado fue persistido.
 
-## Tabla de Contenidos
+## Garantías principales
 
-- [Características](#características)
-- [Dependencias](#dependencias)
-- [Configuración](#configuración)
-- [Uso](#uso)
-- [API](#api)
-- [Registro de Logs](#registro-de-logs)
-- [Contribuciones](#contribuciones)
+- Estado durable en `data/sms-state.json`, con escritura temporal, sincronización a disco, reemplazo atómico y respaldo `.bak`.
+- Idempotencia HTTP mediante `Idempotency-Key`, por cliente, e idempotencia WebSocket mediante `eventId`.
+- Un solo SMS en vuelo. El siguiente se despacha después de `SENT` o `FAILED`, respetando intervalo, tamaño de ráfaga y pausa.
+- Reintentos con backoff exponencial y jitter ante fallos, desconexión o vencimiento del ACK.
+- Protección de sobrecarga por tamaño máximo de cuerpo, lote, cola y rate limits por cliente/IP.
+- WebSocket autenticado por `Authorization: Bearer ...`, ruta exacta `/android`, heartbeat y límite de payload.
+- No se registran cuerpos, números ni mensajes en logs. `/status` tampoco expone el texto de los SMS.
+- El texto se elimina del estado JSON cuando la tarea llega a un estado terminal para reducir exposición y crecimiento del archivo.
+- Apagado ordenado y recuperación de tareas que estaban en vuelo.
 
-## Características
+> JSON funciona bien para una sola instancia y volúmenes moderados. No ejecutes dos procesos sobre el mismo archivo: esta implementación garantiza exclusión dentro de un proceso, no un bloqueo distribuido.
 
-- Envío de SMS a múltiples números.
-- Manejo de tareas pendientes.
-- Autenticación básica para la API.
-- Conexión WebSocket para recibir actualizaciones en tiempo real.
+Si existe el antiguo `queue.json`, se importa una sola vez al nuevo estado conservando sus `taskId`; el archivo original no se elimina.
 
-## Dependencias
+## Requisitos e inicio
 
-Este proyecto utiliza las siguientes dependencias:
-
-- `express`: Framework web para Node.js.
-- `http`: Módulo nativo de Node.js para crear servidores HTTP.
-- `ws`: Librería para WebSocket.
-- `fs`: Módulo nativo de Node.js para manejar el sistema de archivos.
-- `url`: Módulo nativo de Node.js para manejar URLs.
-- `dotenv`: Carga variables de entorno desde un archivo `.env`.
-- `winston`: Librería para el registro de logs.
-- `winston-daily-rotate-file`: Transportador para rotación diaria de archivos de log.
-
-## Configuración
-
-1. Clona el repositorio:
-
-```bash
-git clone https://github.com/elimquijano/sms-service-api.git
-cd sms-service-api
-```
-
-2. Instala las dependencias:
+- Node.js 20 o posterior.
+- Un proxy TLS (Nginx, Caddy, balanceador cloud) en producción.
 
 ```bash
 npm install
+copy .env.example .env
+npm start
 ```
 
-3. Crea un archivo .env en la raíz del proyecto y define las siguientes variables:
+En producción configura `NODE_ENV=production`, secretos distintos y aleatorios, `TRUST_PROXY=true` si existe un único proxy confiable y `REQUIRE_HTTPS=true`. El proceso falla al iniciar si faltan credenciales.
+
+## Autenticación
+
+La forma recomendada para clientes HTTP es:
+
+```http
+Authorization: Bearer secreto-del-cliente
+```
+
+`API_KEYS` acepta `cliente:secreto` y varias entradas separadas por coma. Basic Auth continúa disponible si se configuran `BASIC_AUTH_USER` y `BASIC_AUTH_PASS`.
+
+Android se conecta exclusivamente a `ws(s)://host/android` y coloca `WEBSOCKET_TOKEN` en el header Bearer, tal como exige `api.md`. No se aceptan tokens en la URL.
+
+## Encolar mensajes
+
+`POST /v1/messages` es el endpoint recomendado; `POST /send-sms` se conserva como alias compatible.
 
 ```bash
-PORT=3000
-BASIC_AUTH_USER=tu_usuario
-BASIC_AUTH_PASS=tu_contraseña
-WEBSOCKET_TOKEN=tu_token
+curl -X POST https://gateway.example.com/v1/messages \
+  -H "Authorization: Bearer $API_SECRET" \
+  -H "Idempotency-Key: factura-2026-0001" \
+  -H "Content-Type: application/json" \
+  -d '{"numeros":["+51987654321","987654322"],"mensaje":"Hola"}'
 ```
 
-## Uso
-
-Para iniciar el servidor, ejecuta el siguiente comando:
-
-```bash
-node server.js
-```
-
-El servidor escuchará en el puerto definido en la variable de entorno PORT.
-
-## API
-
-### Enviar SMS
-- Endpoint: POST /send-sms
-
-- Autenticación: Básica
-
-- Cuerpo de la solicitud:
+Respuesta `202 Accepted`:
 
 ```json
 {
-  "numeros": "987654321,987654321",
-  "mensaje": "Tu mensaje aquí"
+  "requestId": "a5bfb2dc-62d7-4ebc-90de-27286f48ec15",
+  "accepted": 2,
+  "duplicate": false,
+  "taskIds": ["sms-...", "sms-..."],
+  "statusUrl": "/v1/requests/a5bfb2dc-62d7-4ebc-90de-27286f48ec15"
 }
 ```
 
-- Respuesta:
+Repetir exactamente la solicitud con la misma clave devuelve `200` y `duplicate: true`. Reutilizarla con números o mensaje distintos devuelve `409`.
 
-**202 Accepted:** La solicitud ha sido aceptada y está en proceso.
-**400 Bad Request:** Si faltan campos o el formato de números es inválido.
+Los números pueden ser un arreglo o un string separado por comas. Un número local de nueve dígitos recibe `DEFAULT_COUNTRY_CODE`; los demás deben contener entre 6 y 20 dígitos y pueden iniciar con `+`.
 
-### Estado
+## Consulta y operación
 
-- Endpoint: GET /status
+- `GET /v1/requests/:requestId`: resumen y tareas de una solicitud del cliente autenticado.
+- `GET /v1/tasks/:taskId`: estado de una tarea.
+- `POST /v1/tasks/:taskId/cancel`: cancela una tarea que todavía no fue despachada.
+- `GET /status`: conexión del teléfono, presión de cola y conteos; requiere autenticación.
+- `GET /health/live`: vida del proceso.
+- `GET /health/ready`: `200` si Android está listo, `503` si el servicio está degradado.
 
-- Autenticación: Básica
+Estados internos: `QUEUED`, `DISPATCHED`, `PROCESSING`, `RETRY_WAIT`, `SENT`, `FAILED`, `DEAD_LETTER` y `CANCELLED`. `SENT` significa que Android confirmó el envío al módem, no que el operador confirmó entrega al destinatario.
 
-- Respuesta:
+## Ritmo, ráfagas y reintentos
 
-```json
-{
-  "phone_connected": true,
-  "pending_tasks_count": 0,
-  "pending_tasks": []
-}
+Los controles se definen en `.env`:
+
+- `SEND_INTERVAL_MS`: pausa mínima entre órdenes.
+- `BURST_SIZE` y `BURST_PAUSE_MS`: cantidad por ráfaga y pausa posterior.
+- `ACK_TIMEOUT_MS`: tiempo máximo de una tarea en vuelo.
+- `MAX_ATTEMPTS`, `RETRY_BASE_MS` y `RETRY_MAX_MS`: política de reintento exponencial.
+- `MAX_QUEUE_SIZE` y `MAX_QUEUED_MESSAGE_BYTES`: rechazan con `503` antes de sobrecargar memoria o disco.
+- `IP_RATE_PER_MINUTE`, `REQUEST_RATE_PER_MINUTE` y `RECIPIENT_RATE_PER_MINUTE`: límites por IP, cliente y destinatarios; responde `429` con `Retry-After`.
+
+Una desconexión o reinicio vuelve a programar el mismo `taskId`; la idempotencia de la app evita los duplicados normales. Como explica `api.md`, no existe una transacción atómica entre servidor, Android y módem, por lo que permanece una ventana física imposible de eliminar por completo.
+
+El historial terminal y sus claves de idempotencia se conservan durante `RETENTION_DAYS` (365 por defecto) y después se depuran. Ajusta ese periodo a tus requisitos de auditoría.
+
+## Pruebas
+
+```bash
+npm test
+npm run check
 ```
-
-## Registro de Logs
-
-Los logs se registran en la consola y se guardan en archivos rotativos diarios en la carpeta logs. Los archivos de log se comprimen y se conservan durante 14 días.
-
-## Contribuciones
-
-Las contribuciones son bienvenidas. Si deseas contribuir, por favor abre un issue o envía un pull request.
