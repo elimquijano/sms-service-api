@@ -1,4 +1,5 @@
 const { TokenBucketLimiter } = require("./rate-limiter");
+const { classifyAndroidFailure } = require("./android-errors");
 
 class Dispatcher {
   constructor({ store, config, logger }) {
@@ -92,7 +93,10 @@ class Dispatcher {
 
   handleStatus(connection, data) {
     if (connection !== this.connection) return;
-    const result = this.store.recordEvent(data, this.config);
+    const failurePolicy = data.status === "FAILED"
+      ? classifyAndroidFailure(data.details, this.config)
+      : null;
+    const result = this.store.recordEvent(data, this.config, Date.now(), failurePolicy);
 
     // El ACK se envía solamente después de que el evento quedó persistido en JSON.
     this.send(connection.ws, {
@@ -110,6 +114,15 @@ class Dispatcher {
         taskId: data.taskId,
         status: data.status,
         nextStatus: result.status,
+      });
+    }
+
+    if (!result.duplicate && !result.orphan && failurePolicy?.gatewayPauseMs) {
+      this.nextAllowedAt = Math.max(this.nextAllowedAt, Date.now() + failurePolicy.gatewayPauseMs);
+      this.logger.warn("Circuito de protección del gateway activado", {
+        androidErrorCode: failurePolicy.code,
+        category: failurePolicy.category,
+        pauseMs: failurePolicy.gatewayPauseMs,
       });
     }
 
@@ -231,6 +244,7 @@ class Dispatcher {
       connected: Boolean(connection && connection.ws.readyState === 1),
       ready: Boolean(connection && connection.ready && connection.ws.readyState === 1),
       inflightTaskId: connection?.inflightTaskId || null,
+      nextDispatchAt: this.nextAllowedAt > Date.now() ? this.nextAllowedAt : null,
     };
   }
 

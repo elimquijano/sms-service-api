@@ -1,4 +1,5 @@
 const path = require("node:path");
+const os = require("node:os");
 
 function integer(name, fallback, { min = 0, max = Number.MAX_SAFE_INTEGER } = {}) {
   const raw = process.env[name];
@@ -32,6 +33,7 @@ function loadConfig() {
   const requestedSendInterval = integer("SEND_INTERVAL_MS", 1500, { min: 250 });
   const config = {
     env: process.env.NODE_ENV || "development",
+    instanceId: process.env.SERVICE_INSTANCE_ID || os.hostname(),
     port: integer("PORT", 3000, { min: 1, max: 65535 }),
     host: process.env.HOST || "0.0.0.0",
     trustProxy: boolean("TRUST_PROXY", false),
@@ -61,6 +63,9 @@ function loadConfig() {
     retryBaseMs: integer("RETRY_BASE_MS", 5000, { min: 500 }),
     retryMaxMs: integer("RETRY_MAX_MS", 30_000, { min: 500 }),
     retryFailedTasks: boolean("RETRY_FAILED_TASKS", true),
+    modemErrorPauseMs: integer("MODEM_ERROR_PAUSE_MS", 60_000, { min: 5000 }),
+    networkErrorPauseMs: integer("NETWORK_ERROR_PAUSE_MS", 30_000, { min: 5000 }),
+    rateLimitPauseMs: integer("RATE_LIMIT_PAUSE_MS", 120_000, { min: 30_000 }),
     heartbeatMs: integer("HEARTBEAT_MS", 30_000, { min: 5000 }),
     wsMessagesPerMinute: integer("WS_MESSAGES_PER_MINUTE", 240, { min: 10 }),
     wsUpgradeRatePerMinute: integer("WS_UPGRADE_RATE_PER_MINUTE", 30, { min: 1 }),

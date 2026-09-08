@@ -1,12 +1,12 @@
 {
   "name": "sms-service-api",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "API durable y segura para encolar y despachar SMS hacia un gateway Android",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "test": "node --test --test-concurrency=1",
-    "check": "node --check server.js && node --check src/store.js && node --check src/dispatcher.js && node --check src/sms.js"
+    "check": "node --check server.js && node --check src/store.js && node --check src/dispatcher.js && node --check src/sms.js && node --check src/android-errors.js"
   },
   "keywords": [],
   "author": "",

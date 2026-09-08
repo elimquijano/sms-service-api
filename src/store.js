@@ -232,6 +232,8 @@ class JsonStore {
           availableAt: now,
           leaseUntil: null,
           lastError: null,
+          lastErrorCode: null,
+          lastErrorCategory: null,
           lastEventId: null,
           providerTimestamp: null,
           createdAt: now,
@@ -352,7 +354,7 @@ class JsonStore {
     });
   }
 
-  recordEvent(data, config, now = Date.now()) {
+  recordEvent(data, config, now = Date.now(), failurePolicy = null) {
     const existingEvent = this.state.events[data.eventId];
     const currentTask = this.state.tasks[data.taskId];
     if (existingEvent) {
@@ -389,15 +391,22 @@ class JsonStore {
         task.status = "SENT";
         task.leaseUntil = null;
         task.lastError = null;
+        task.lastErrorCode = null;
+        task.lastErrorCategory = null;
         task.mensaje = null;
         return { duplicate: false, orphan: false, task, terminal: true, status: task.status };
       }
 
-      const shouldRetry = config.retryFailedTasks && task.attempts < config.maxAttempts;
+      const shouldRetry = config.retryFailedTasks &&
+        failurePolicy?.retryable !== false &&
+        task.attempts < config.maxAttempts;
       task.status = shouldRetry ? "RETRY_WAIT" : "FAILED";
-      task.availableAt = shouldRetry ? now + retryDelay(task.attempts, config) : now;
+      const retryAfterMs = Math.max(retryDelay(task.attempts, config), failurePolicy?.retryAfterMs || 0);
+      task.availableAt = shouldRetry ? now + retryAfterMs : now;
       task.leaseUntil = null;
       task.lastError = data.details || "Fallo reportado por Android";
+      task.lastErrorCode = failurePolicy?.code ?? null;
+      task.lastErrorCategory = failurePolicy?.category || "UNKNOWN";
       if (!shouldRetry) task.mensaje = null;
       return { duplicate: false, orphan: false, task, terminal: !shouldRetry, status: task.status };
     });
@@ -474,6 +483,8 @@ function publicTask(task) {
     attempts: task.attempts,
     availableAt: task.availableAt,
     lastError: task.lastError,
+    lastErrorCode: task.lastErrorCode ?? null,
+    lastErrorCategory: task.lastErrorCategory || null,
     lastEventId: task.lastEventId,
     providerTimestamp: task.providerTimestamp,
     smsEncoding: task.smsEncoding || "UNKNOWN",

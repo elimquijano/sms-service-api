@@ -145,6 +145,29 @@ test("un timeout libera la cola y permite despachar la siguiente tarea", (t) => 
   assert.equal(store.claimNext(6001, 5000).taskId, created.taskIds[1]);
 });
 
+test("un error permanente no se reintenta", (t) => {
+  const { store } = fixture(t);
+  const created = enqueue(store, { idempotencyKey: "permanent-error" });
+  store.claimNext(1000, 5000);
+  const result = store.recordEvent({
+    type: "STATUS_UPDATE",
+    eventId: "permanent-event",
+    taskId: created.taskIds[0],
+    status: "FAILED",
+    details: "error Android 109",
+  }, retryConfig, 2000, {
+    code: 109,
+    category: "RIL_ENCODING_ERROR",
+    retryable: false,
+    retryAfterMs: 0,
+  });
+  assert.equal(result.status, "FAILED");
+  const task = store.getTask(created.taskIds[0], "client-a");
+  assert.equal(task.attempts, 1);
+  assert.equal(task.lastErrorCode, 109);
+  assert.equal(task.lastErrorCategory, "RIL_ENCODING_ERROR");
+});
+
 test("importa queue.json legado una sola vez conservando taskId", (t) => {
   const { filename, store } = fixture(t);
   const legacyFilename = path.join(path.dirname(filename), "queue.json");

@@ -78,7 +78,7 @@ El mensaje tiene un límite HTTP absoluto de 300 caracteres, pero además debe c
 - `GET /v1/requests/:requestId`: resumen y tareas de una solicitud del cliente autenticado.
 - `GET /v1/tasks/:taskId`: estado de una tarea.
 - `POST /v1/tasks/:taskId/cancel`: cancela una tarea que todavía no fue despachada.
-- `GET /status`: conexión del teléfono, presión de cola y conteos; requiere autenticación.
+- `GET /status`: versión/instancia, conexión del teléfono, política efectiva, presión de cola y conteos; requiere autenticación.
 - `GET /health/live`: vida del proceso.
 - `GET /health/ready`: `200` si Android está listo, `503` si el servicio está degradado.
 
@@ -94,6 +94,7 @@ Los controles se definen en `.env`:
 - `ACK_TIMEOUT_MS`: tiempo máximo de una tarea en vuelo.
 - `MAX_RETRIES` admite como máximo `2`; son dos reintentos después del envío inicial.
 - `RETRY_BASE_MS` y `RETRY_MAX_MS`: espera exponencial entre reintentos.
+- `MODEM_ERROR_PAUSE_MS`, `NETWORK_ERROR_PAUSE_MS` y `RATE_LIMIT_PAUSE_MS`: circuito global según el código devuelto por Android. Un error de módem como 124 pausa 60 segundos; el rate limit 106 pausa 120 segundos.
 - `MAX_QUEUE_SIZE` y `MAX_QUEUED_MESSAGE_BYTES`: rechazan con `503` antes de sobrecargar memoria o disco.
 - `IP_RATE_PER_MINUTE`, `REQUEST_RATE_PER_MINUTE` y `RECIPIENT_RATE_PER_MINUTE`: límites por IP, cliente y destinatarios; responde `429` con `Retry-After`.
 

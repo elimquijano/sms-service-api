@@ -23,8 +23,10 @@ const {
   validateStatusUpdate,
 } = require("./src/validation");
 const { createLogger } = require("./logger");
+const packageInfo = require("./package.json");
 
 function createSmsService(config, logger = createLogger(config.logLevel)) {
+  const startedAt = Date.now();
   const store = new JsonStore(config.stateFile, logger);
   const legacyClientId = config.basicAuthUser || config.apiKeys.split(",")[0]?.split(":")[0] || "legacy";
   const imported = store.importLegacyQueue(path.join(__dirname, "queue.json"), legacyClientId);
@@ -38,6 +40,7 @@ function createSmsService(config, logger = createLogger(config.logLevel)) {
     const suppliedId = req.headers["x-request-id"] || "";
     req.requestId = /^[A-Za-z0-9._-]{1,128}$/.test(suppliedId) ? suppliedId : crypto.randomUUID();
     res.setHeader("X-Request-Id", req.requestId);
+    res.setHeader("X-Service-Version", packageInfo.version);
     const startedAt = Date.now();
     res.on("finish", () => logger.info("Solicitud HTTP", {
       requestId: req.requestId,
@@ -159,9 +162,16 @@ function createSmsService(config, logger = createLogger(config.logLevel)) {
     const gateway = dispatcher.status();
     const counts = store.getCounts();
     res.json({
+      service: {
+        version: packageInfo.version,
+        instance_id: config.instanceId,
+        process_id: process.pid,
+        started_at: startedAt,
+      },
       phone_connected: gateway.connected,
       phone_ready: gateway.ready,
       inflight_task_id: gateway.inflightTaskId,
+      next_dispatch_at: gateway.nextDispatchAt,
       pending_tasks_count: Object.entries(counts)
         .filter(([status]) => ["QUEUED", "RETRY_WAIT", "DISPATCHED", "PROCESSING"].includes(status))
         .reduce((total, [, count]) => total + count, 0),
@@ -314,7 +324,13 @@ function main() {
   const service = createSmsService(config, logger);
   service.dispatcher.start();
   service.server.listen(config.port, config.host, () => {
-    logger.info("Servidor SMS iniciado", { host: config.host, port: config.port, env: config.env });
+    logger.info("Servidor SMS iniciado", {
+      host: config.host,
+      port: config.port,
+      env: config.env,
+      version: packageInfo.version,
+      instanceId: config.instanceId,
+    });
     logger.info("Política de despacho activa", {
       androidSmsRpm: config.androidSmsRpm,
       minimumIntervalMs: config.sendIntervalMs,
